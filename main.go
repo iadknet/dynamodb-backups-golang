@@ -32,9 +32,6 @@ func init() {
 	// initialize dynamo client
 	dynamo = dynamodb.New(session.New())
 
-	// Log as JSON instead of the default ASCII formatter.
-	log.SetFormatter(&log.JSONFormatter{})
-
 	// Output to stdout
 	log.SetOutput(os.Stdout)
 
