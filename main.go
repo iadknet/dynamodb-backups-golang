@@ -10,8 +10,8 @@ import (
 	"github.com/aws/aws-sdk-go/aws/session"
 	"github.com/aws/aws-sdk-go/service/dynamodb"
 	"github.com/caarlos0/env"
-
-	log "github.com/sirupsen/logrus"
+	"github.com/onrik/logrus/filename"
+	"github.com/sirupsen/logrus"
 )
 
 type Config struct {
@@ -21,44 +21,60 @@ type Config struct {
 	LogFormatter     string `env:"LOG_FORMATTER" envDefault:"text"`
 }
 
-var config = Config{}
+var config = &Config{}
 var dynamo = &dynamodb.DynamoDB{}
+var log = &logrus.Entry{}
 
 func init() {
 
 	// parse configuration
-	env.Parse(&config)
+	env.Parse(config)
 
 	// initialize dynamo client
 	dynamo = dynamodb.New(session.New())
 
 	// Output to stdout
-	log.SetOutput(os.Stdout)
+	logrus.SetOutput(os.Stdout)
 
 	// Only log the warning severity or above.
-	logLevel, err := log.ParseLevel(config.LogLevel)
+	logLevel, err := logrus.ParseLevel(config.LogLevel)
 	if err != nil {
-		log.SetLevel(log.InfoLevel)
-		log.Error("Could not read log level from configuration, defaulting to INFO")
+		logrus.SetLevel(logrus.InfoLevel)
+		logrus.Error("Could not read log level from configuration, defaulting to INFO")
 	}
-	log.SetLevel(logLevel)
+	logrus.SetLevel(logLevel)
 
 	// set the log formatter
 	if config.LogFormatter == "text" {
-		log.SetFormatter(&log.TextFormatter{})
+		logrus.SetFormatter(&logrus.TextFormatter{})
 	} else if config.LogFormatter == "json" {
-		log.SetFormatter(&log.JSONFormatter{})
+		logrus.SetFormatter(&logrus.JSONFormatter{})
 	} else {
-		log.SetFormatter(&log.JSONFormatter{})
-		log.Error("Could not read log formatter from configuration, defaulting to JSON")
+		logrus.SetFormatter(&logrus.JSONFormatter{})
+		logrus.Error("Could not read log formatter from configuration, defaulting to JSON")
 	}
+
+	// Add filename and line number if logging level is debug
+	if logLevel == logrus.DebugLevel {
+		logrus.AddHook(filename.NewHook())
+	}
+
+	// Add common context to log messages
+	log = logrus.WithFields(
+		logrus.Fields{
+			"service": "dynamodb-backups",
+		},
+	)
 }
 
 func main() {
 
 	matchedTables := getTablesRegex(config.TableRegex)
 
-	log.Debug("Matched tables", matchedTables)
+	log.WithFields(logrus.Fields{
+		"matchedTablesList": matchedTables,
+		"count":             len(matchedTables),
+	}).Info(fmt.Sprintf("Matche %d tables", len(matchedTables)))
 
 	for _, table := range matchedTables {
 		createBackup(table)
@@ -101,6 +117,11 @@ func getTablesRegex(pattern string) []string {
 }
 
 func createBackup(table string) {
+
+	localLogger := log.WithFields(logrus.Fields{
+		"table": table,
+	})
+
 	now := time.Now().UTC()
 
 	timestamp := fmt.Sprintf("%d%02d%02d%02d%02d",
@@ -118,14 +139,26 @@ func createBackup(table string) {
 	resp, err := dynamo.CreateBackup(&params)
 
 	if err == nil { // resp is now filled
-		log.Debug("Creating backup: ", resp)
+
+		localLogger.WithFields(logrus.Fields{
+			"action":     "createBackup",
+			"BackupName": backupName,
+		}).Info(fmt.Sprintf("Creating backup for table %s", table))
+
+		localLogger.WithFields(logrus.Fields{
+			"responseObject": resp,
+		}).Debug("Creating backup")
+
 	} else {
-		log.Error(err)
+		localLogger.Error(err)
 	}
 
 }
 
 func expireBackups(table string) {
+	localLogger := log.WithFields(logrus.Fields{
+		"table": table,
+	})
 
 	timeRangeUpperBound := time.Now().AddDate(0, 0, -config.BackupExpireDays)
 
@@ -135,30 +168,43 @@ func expireBackups(table string) {
 	}
 
 	listBackupsOutput, err := dynamo.ListBackups(&listBackupsInput)
-	log.Debug("listBackupsOutput: ", listBackupsOutput)
+	localLogger.WithFields(logrus.Fields{
+		"listBackupsOutput": listBackupsOutput,
+	}).Debug("listBackupsOutput")
+
 	if err == nil {
 		for _, backupSummary := range listBackupsOutput.BackupSummaries {
 			deleteBackup(backupSummary)
 		}
 	} else {
-		log.Error(err)
+		localLogger.Error(err)
 	}
 
 }
 
 func deleteBackup(backupSummary *dynamodb.BackupSummary) {
+	localLogger := log.WithFields(logrus.Fields{
+		"backupName": backupSummary.BackupName,
+	})
 
 	deleteBackupInput := dynamodb.DeleteBackupInput{
 		BackupArn: backupSummary.BackupArn,
 	}
 
-	log.Info("Deleting backup: ", deleteBackupInput)
+	localLogger.WithFields(logrus.Fields{
+		"deleteBackupInput": deleteBackupInput,
+	}).Debug("deleteBackupInput")
+
+	localLogger.Info(fmt.Sprintf("Deleting backup %s", *backupSummary.BackupName))
 	deleteBackupOutput, err := dynamo.DeleteBackup(&deleteBackupInput)
 
 	if err == nil {
-		log.Debug(deleteBackupOutput)
+		localLogger.WithFields(logrus.Fields{
+			"deleteBackupOutput": deleteBackupOutput,
+		}).Debug("deleteBackupOutput")
+
 	} else {
-		log.Error(err)
+		localLogger.Error(err)
 	}
 
 }
