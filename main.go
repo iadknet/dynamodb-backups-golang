@@ -74,13 +74,12 @@ func main() {
 	log.WithFields(logrus.Fields{
 		"matchedTablesList": matchedTables,
 		"count":             len(matchedTables),
-	}).Info(fmt.Sprintf("Matche %d tables", len(matchedTables)))
+	}).Info(fmt.Sprintf("Matched %d tables", len(matchedTables)))
 
 	for _, table := range matchedTables {
 		createBackup(table)
 		expireBackups(table)
 	}
-
 }
 
 func getTablesRegex(pattern string) []string {
@@ -110,7 +109,6 @@ func getTablesRegex(pattern string) []string {
 				log.Error(aerr.Error())
 			}
 		}
-
 	}
 
 	return matchedTables
@@ -152,7 +150,6 @@ func createBackup(table string) {
 	} else {
 		localLogger.Error(err)
 	}
-
 }
 
 func expireBackups(table string) {
@@ -179,12 +176,13 @@ func expireBackups(table string) {
 	} else {
 		localLogger.Error(err)
 	}
-
 }
 
 func deleteBackup(backupSummary *dynamodb.BackupSummary) {
 	localLogger := log.WithFields(logrus.Fields{
-		"backupName": backupSummary.BackupName,
+		"backupName": *backupSummary.BackupName,
+		"table":      *backupSummary.TableName,
+		"action":     "deleteBackup",
 	})
 
 	deleteBackupInput := dynamodb.DeleteBackupInput{
@@ -195,7 +193,7 @@ func deleteBackup(backupSummary *dynamodb.BackupSummary) {
 		"deleteBackupInput": deleteBackupInput,
 	}).Debug("deleteBackupInput")
 
-	localLogger.Info(fmt.Sprintf("Deleting backup %s", *backupSummary.BackupName))
+	localLogger.Info(fmt.Sprintf("Deleting backup for table %s", *backupSummary.TableName))
 	deleteBackupOutput, err := dynamo.DeleteBackup(&deleteBackupInput)
 
 	if err == nil {
@@ -206,5 +204,4 @@ func deleteBackup(backupSummary *dynamodb.BackupSummary) {
 	} else {
 		localLogger.Error(err)
 	}
-
 }
