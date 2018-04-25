@@ -21,14 +21,25 @@ type Config struct {
 	LogFormatter     string `env:"LOG_FORMATTER" envDefault:"text"`
 }
 
+// ExpireMessage Struct for messages sent over the expire channel
 type ExpireMessage struct {
 	TableName string
 	Count     int
+	Error     error
 }
 
+// CreateMessage Struct for messages sent over the create channel
 type CreateMessage struct {
 	TableName  string
 	BackupName string
+	Error      error
+}
+
+// DeleteMessage Struct for messages sent over the delete channel
+type DeleteMessage struct {
+	TableName  string
+	BackupName string
+	Error      error
 }
 
 var config = &Config{}
@@ -177,7 +188,8 @@ func createBackup(table string, createChannel chan CreateMessage) {
 
 	resp, err := dynamo.CreateBackup(&params)
 
-	if err == nil { // resp is now filled
+	// need to figure out how to pass errors back to the channel
+	if err == nil {
 
 		localLogger.WithFields(logrus.Fields{
 			"action":     "createBackup",
@@ -192,7 +204,15 @@ func createBackup(table string, createChannel chan CreateMessage) {
 			TableName:  table,
 			BackupName: backupName,
 		}
+	} else {
+		localLogger.Error(err)
+		createChannel <- CreateMessage{
+			TableName:  table,
+			BackupName: backupName,
+			Error:      err,
+		}
 	}
+
 }
 
 func expireBackups(table string, expireChannel chan ExpireMessage) {
