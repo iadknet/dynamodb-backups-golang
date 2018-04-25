@@ -26,6 +26,11 @@ type ExpireMessage struct {
 	Count     int
 }
 
+type CreateMessage struct {
+	TableName  string
+	BackupName string
+}
+
 var config = &Config{}
 var dynamo = &dynamodb.DynamoDB{}
 var log = &logrus.Entry{}
@@ -73,6 +78,7 @@ func init() {
 }
 
 func main() {
+	start := time.Now()
 
 	matchedTables := getTablesRegex(config.TableRegex)
 	tableCount := len(matchedTables)
@@ -83,7 +89,7 @@ func main() {
 		"regex":             config.TableRegex,
 	}).Info(fmt.Sprintf("Matched %d tables", len(matchedTables)))
 
-	createChannel := make(chan string, tableCount)
+	createChannel := make(chan CreateMessage, tableCount)
 	expireChannel := make(chan ExpireMessage, tableCount)
 
 	for _, table := range matchedTables {
@@ -93,7 +99,13 @@ func main() {
 	}
 
 	for i := 0; i < tableCount; i++ {
-		log.Info(fmt.Sprintf("Created backup %s", <-createChannel))
+		createMessage := <-createChannel
+		tableName := createMessage.TableName
+		backupName := createMessage.BackupName
+		log.WithFields(logrus.Fields{
+			"table":      tableName,
+			"backupName": backupName,
+		}).Info(fmt.Sprintf("Created backup for table %s", tableName))
 	}
 
 	for i := 0; i < tableCount; i++ {
@@ -106,6 +118,9 @@ func main() {
 		}).Info(fmt.Sprintf("Deleted %d backups from table %s", deletedCount, tableName))
 	}
 
+	elapsed := time.Since(start)
+
+	log.Info(fmt.Sprintf("Main() execution time: %s", elapsed))
 }
 
 func getTablesRegex(pattern string) []string {
@@ -140,7 +155,7 @@ func getTablesRegex(pattern string) []string {
 	return matchedTables
 }
 
-func createBackup(table string, createChannel chan string) {
+func createBackup(table string, createChannel chan CreateMessage) {
 
 	localLogger := log.WithFields(logrus.Fields{
 		"table": table,
@@ -173,11 +188,10 @@ func createBackup(table string, createChannel chan string) {
 			"responseObject": resp,
 		}).Debug("Creating backup")
 
-		createChannel <- backupName
-
-	} else {
-		localLogger.Error(err)
-		createChannel <- err.Error()
+		createChannel <- CreateMessage{
+			TableName:  table,
+			BackupName: backupName,
+		}
 	}
 }
 
@@ -199,21 +213,28 @@ func expireBackups(table string, expireChannel chan ExpireMessage) {
 		"listBackupsOutput": listBackupsOutput,
 	}).Debug("listBackupsOutput")
 
+	deleteCount := len(listBackupsOutput.BackupSummaries)
+	deleteChannel := make(chan string, deleteCount)
 	if err == nil {
 		for _, backupSummary := range listBackupsOutput.BackupSummaries {
-			deleteBackup(backupSummary)
+			go deleteBackup(backupSummary, deleteChannel)
 		}
 	} else {
+		close(deleteChannel)
 		localLogger.Error(err)
+	}
+
+	for i := 0; i < deleteCount; i++ {
+		<-deleteChannel
 	}
 
 	expireChannel <- ExpireMessage{
 		TableName: table,
-		Count:     len(listBackupsOutput.BackupSummaries),
+		Count:     deleteCount,
 	}
 }
 
-func deleteBackup(backupSummary *dynamodb.BackupSummary) {
+func deleteBackup(backupSummary *dynamodb.BackupSummary, deleteChannel chan string) {
 	localLogger := log.WithFields(logrus.Fields{
 		"backupName": *backupSummary.BackupName,
 		"table":      *backupSummary.TableName,
@@ -232,11 +253,13 @@ func deleteBackup(backupSummary *dynamodb.BackupSummary) {
 	deleteBackupOutput, err := dynamo.DeleteBackup(&deleteBackupInput)
 
 	if err == nil {
+		deleteChannel <- *deleteBackupOutput.BackupDescription.BackupDetails.BackupName
 		localLogger.WithFields(logrus.Fields{
 			"deleteBackupOutput": deleteBackupOutput,
 		}).Debug("deleteBackupOutput")
 
 	} else {
+		deleteChannel <- err.Error()
 		localLogger.Error(err)
 	}
 }
