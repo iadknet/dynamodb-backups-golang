@@ -21,6 +21,11 @@ type Config struct {
 	LogFormatter     string `env:"LOG_FORMATTER" envDefault:"text"`
 }
 
+type ExpireMessage struct {
+	TableName string
+	Count     int
+}
+
 var config = &Config{}
 var dynamo = &dynamodb.DynamoDB{}
 var log = &logrus.Entry{}
@@ -70,16 +75,37 @@ func init() {
 func main() {
 
 	matchedTables := getTablesRegex(config.TableRegex)
+	tableCount := len(matchedTables)
 
 	log.WithFields(logrus.Fields{
 		"matchedTablesList": matchedTables,
-		"count":             len(matchedTables),
+		"count":             tableCount,
+		"regex":             config.TableRegex,
 	}).Info(fmt.Sprintf("Matched %d tables", len(matchedTables)))
 
+	createChannel := make(chan string, tableCount)
+	expireChannel := make(chan ExpireMessage, tableCount)
+
 	for _, table := range matchedTables {
-		createBackup(table)
-		expireBackups(table)
+
+		go createBackup(table, createChannel)
+		go expireBackups(table, expireChannel)
 	}
+
+	for i := 0; i < tableCount; i++ {
+		log.Info(fmt.Sprintf("Created backup %s", <-createChannel))
+	}
+
+	for i := 0; i < tableCount; i++ {
+		expireMessage := <-expireChannel
+		tableName := expireMessage.TableName
+		deletedCount := expireMessage.Count
+		log.WithFields(logrus.Fields{
+			"table": tableName,
+			"count": deletedCount,
+		}).Info(fmt.Sprintf("Deleted %d backups from table %s", deletedCount, tableName))
+	}
+
 }
 
 func getTablesRegex(pattern string) []string {
@@ -114,7 +140,7 @@ func getTablesRegex(pattern string) []string {
 	return matchedTables
 }
 
-func createBackup(table string) {
+func createBackup(table string, createChannel chan string) {
 
 	localLogger := log.WithFields(logrus.Fields{
 		"table": table,
@@ -147,12 +173,16 @@ func createBackup(table string) {
 			"responseObject": resp,
 		}).Debug("Creating backup")
 
+		createChannel <- backupName
+
 	} else {
 		localLogger.Error(err)
+		createChannel <- err.Error()
 	}
 }
 
-func expireBackups(table string) {
+func expireBackups(table string, expireChannel chan ExpireMessage) {
+
 	localLogger := log.WithFields(logrus.Fields{
 		"table": table,
 	})
@@ -175,6 +205,11 @@ func expireBackups(table string) {
 		}
 	} else {
 		localLogger.Error(err)
+	}
+
+	expireChannel <- ExpireMessage{
+		TableName: table,
+		Count:     len(listBackupsOutput.BackupSummaries),
 	}
 }
 
