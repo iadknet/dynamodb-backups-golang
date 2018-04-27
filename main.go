@@ -14,6 +14,7 @@ import (
 	"github.com/sirupsen/logrus"
 )
 
+// Config struct for storing app config data
 type Config struct {
 	TableRegex       string `env:"TABLE_REGEX"`
 	BackupExpireDays int    `env:"BACKUP_EXPIRE_DAYS" envDefault:"1"`
@@ -61,7 +62,7 @@ func init() {
 	logLevel, err := logrus.ParseLevel(config.LogLevel)
 	if err != nil {
 		logrus.SetLevel(logrus.InfoLevel)
-		logrus.Error("Could not read log level from configuration, defaulting to INFO")
+		logrus.Warn("Could not read log level from configuration, defaulting to INFO")
 	}
 	logrus.SetLevel(logLevel)
 
@@ -72,7 +73,7 @@ func init() {
 		logrus.SetFormatter(&logrus.JSONFormatter{})
 	} else {
 		logrus.SetFormatter(&logrus.JSONFormatter{})
-		logrus.Error("Could not read log formatter from configuration, defaulting to JSON")
+		logrus.Warn("Could not read log formatter from configuration, defaulting to JSON")
 	}
 
 	// Add filename and line number if logging level is debug
